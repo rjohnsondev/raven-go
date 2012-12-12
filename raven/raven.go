@@ -122,7 +122,7 @@ func (client Client) CaptureMessage(message ...string) (result string, err error
 		return "", err
 	}
 
-	resp, err := client.send(buf.Bytes(), timestamp)
+	resp, err := client.Send(buf.Bytes(), timestamp)
 	if err != nil {
 		return "", err
 	}
@@ -134,13 +134,13 @@ func (client Client) CaptureMessage(message ...string) (result string, err error
 }
 
 // CaptureMessagef is similar to CaptureMessage except it is using Printf like parameters for
-// formating the message 
+// formating the message
 func (client Client) CaptureMessagef(format string, a ...interface{}) (result string, err error) {
 	return client.CaptureMessage(fmt.Sprintf(format, a))
 }
 
 // sends a packet to the sentry server with a given timestamp
-func (client Client) send(packet []byte, timestamp time.Time) (response *http.Response, err error) {
+func (client Client) Send(packet []byte, timestamp time.Time) (response *http.Response, err error) {
 	apiURL := *client.URL
 	apiURL.Path = path.Join(apiURL.Path, "/api/"+client.Project+"/store/")
 	apiURL.User = nil
