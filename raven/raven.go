@@ -58,10 +58,16 @@ type UdpSentryTransport struct {
 
 func (self *UdpSentryTransport) Send(packet []byte, timestamp time.Time) (response string, err error) {
 	host := self.URL.Host
-	defer func() {
-		self.Client.Close()
+
+	// Only open a new clinet if one hasn't been explicitly set
+	// already
+	if self.Client == nil {
 		conn, _ := net.Dial("udp", host)
 		self.Client = conn
+	}
+
+	defer func() {
+		self.Client.Close()
 	}()
 
 	if err != nil {
@@ -174,9 +180,8 @@ func NewClient(dsn string) (self *Client, err error) {
 
 	switch {
 	case u.Scheme == "udp":
-		udpClient, _ := net.Dial("udp", u.Host)
 		sentryTransport = &UdpSentryTransport{URL: u,
-			Client:    udpClient,
+			Client:    nil,
 			PublicKey: publicKey}
 	case u.Scheme == "http":
 		httpClient := &http.Client{nil, check, nil}

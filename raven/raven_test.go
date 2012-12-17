@@ -26,7 +26,7 @@ func RavenSpec(c gs.Context) {
 	t := new(ts.SimpleT)
 	ctrl := gomock.NewController(t)
 
-	c.Specify("sending udp", func() {
+	c.Specify("udp transport writes to a network connection", func() {
 		dsn := "udp://someuser:somepass@localhost:801/2"
 		client, _ := NewClient(dsn)
 
