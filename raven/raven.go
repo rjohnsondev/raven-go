@@ -10,7 +10,7 @@
 
 		client, err := raven.NewClient(dsn)
 		...
-		id, err := client.CaptureMessage("some text")
+		id, err := self.CaptureMessage("some text")
 
 
 */
@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -66,7 +67,7 @@ const iso8601 = "2006-01-02T15:04:05"
 //	{PROTOCOL}://{PUBLIC_KEY}:{SECRET_KEY}@{HOST}/{PATH}{PROJECT_ID}
 // eg:
 //	http://abcd:efgh@sentry.example.com/sentry/project1
-func NewClient(dsn string) (client *Client, err error) {
+func NewClient(dsn string) (self *Client, err error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, err
@@ -88,8 +89,8 @@ func NewClient(dsn string) (client *Client, err error) {
 }
 
 // CaptureMessage sends a message to the Sentry server. The resulting string is an event identifier.
-func (client Client) CaptureMessage(message ...string) (result string, err error) {
-	eventId, err := uuid4()
+func (self *Client) CaptureMessage(message ...string) (result string, err error) {
+	eventId := uuid4()
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +99,7 @@ func (client Client) CaptureMessage(message ...string) (result string, err error
 
 	packet := sentryRequest{
 		EventId:   eventId,
-		Project:   client.Project,
+		Project:   self.Project,
 		Message:   strings.Join(message, " "),
 		Timestamp: timestampStr,
 		Level:     "error",
@@ -124,27 +125,64 @@ func (client Client) CaptureMessage(message ...string) (result string, err error
 		return "", err
 	}
 
-	resp, err := client.Send(buf.Bytes(), timestamp)
-	if err != nil {
+	result, ok := self.Send(buf.Bytes(), timestamp)
+	if ok != nil {
 		return "", err
 	}
-	if resp.StatusCode != 200 {
-		return "", errors.New(resp.Status)
-	}
-
 	return eventId, nil
 }
 
 // CaptureMessagef is similar to CaptureMessage except it is using Printf like parameters for
 // formating the message
-func (client Client) CaptureMessagef(format string, a ...interface{}) (result string, err error) {
-	return client.CaptureMessage(fmt.Sprintf(format, a))
+func (self *Client) CaptureMessagef(format string, a ...interface{}) (result string, err error) {
+	return self.CaptureMessage(fmt.Sprintf(format, a))
+}
+
+/*
+Sends data using HTTP or UDP.
+
+Response may or may not be populated, but the error code will always
+be populated if one is detected.
+*/
+func (self *Client) Send(packet []byte, timestamp time.Time) (result string, err error) {
+	if self.URL.Scheme == "udp" {
+		return self.SendUdp(packet, timestamp)
+	} else if self.URL.Scheme == "http" {
+		return self.SendHttp(packet, timestamp)
+	}
+	panic("invalid url scheme!")
+}
+
+// send a packet to the sentry server using UDP
+func (self *Client) SendUdp(packet []byte, timestamp time.Time) (response string, err error) {
+	host := self.URL.Host
+
+	conn, err := net.Dial("udp", host)
+	defer func() {
+		conn.Close()
+	}()
+
+	if err != nil {
+		log.Println("Error opening the UDP socket: [%s]", host)
+		return err.Error(), err
+	}
+
+	authHeader := self.auth_header(timestamp)
+	udp_msg := fmt.Sprintf("%s\n\n%s", authHeader, string(packet))
+	conn.Write([]byte(udp_msg))
+
+	return "", nil
+}
+
+/* Compute the Sentry authentication header */
+func (self *Client) auth_header(timestamp time.Time) string {
+	return fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(), self.PublicKey)
 }
 
 // sends a packet to the sentry server with a given timestamp
-func (client Client) Send(packet []byte, timestamp time.Time) (response *http.Response, err error) {
-	apiURL := *client.URL
-	apiURL.Path = path.Join(apiURL.Path, "/api/"+client.Project+"/store/")
+func (self *Client) SendHttp(packet []byte, timestamp time.Time) (response string, err error) {
+	apiURL := self.URL
+	apiURL.Path = path.Join(apiURL.Path, "/api/"+self.Project+"/store/")
 	apiURL.User = nil
 	location := apiURL.String()
 
@@ -153,25 +191,33 @@ func (client Client) Send(packet []byte, timestamp time.Time) (response *http.Re
 		buf := bytes.NewBuffer(packet)
 		req, err := http.NewRequest("POST", location, buf)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
-		authHeader := fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(), client.PublicKey)
+		authHeader := self.auth_header(timestamp)
 		req.Header.Add("X-Sentry-Auth", authHeader)
 		req.Header.Add("Content-Type", "application/octet-stream")
 		req.Header.Add("Connection", "close")
 		req.Header.Add("Accept-Encoding", "identity")
 
-		resp, err := client.httpClient.Do(req)
+		resp, err := self.httpClient.Do(req)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
 		if resp.StatusCode == 301 {
 			// set the location to the new one to retry on the next iteration
 			location = resp.Header["Location"][0]
 		} else {
-			return resp, nil
+
+			// We want to return an error for anything that's not a
+			// straight HTTP 200
+			if resp.StatusCode != 200 {
+				body, _ := ioutil.ReadAll(resp.Body)
+				return string(body), errors.New(resp.Status)
+			}
+			body, _ := ioutil.ReadAll(resp.Body)
+			return string(body), nil
 		}
 	}
 	// should never get here
