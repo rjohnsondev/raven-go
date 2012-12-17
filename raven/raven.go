@@ -35,12 +35,94 @@ import (
 	"time"
 )
 
+type SentryTransport interface {
+	Send(packet []byte, timestamp time.Time) (response string, err error)
+}
+
+type HttpSentryTransport struct {
+	PublicKey string
+	URL       *url.URL
+	Project   string
+	Client    *http.Client
+}
+
+type UdpSentryTransport struct {
+	PublicKey string
+	URL       *url.URL
+	Client    net.Conn
+}
+
+func (self *UdpSentryTransport) Send(packet []byte, timestamp time.Time) (response string, err error) {
+	host := self.URL.Host
+	defer func() {
+		self.Client.Close()
+		conn, _ := net.Dial("udp", host)
+		self.Client = conn
+	}()
+
+	if err != nil {
+		log.Println("Error opening the UDP socket: [%s]", host)
+		return err.Error(), err
+	}
+
+	authHeader := auth_header(timestamp, self.PublicKey)
+	udp_msg := fmt.Sprintf("%s\n\n%s", authHeader, string(packet))
+	self.Client.Write([]byte(udp_msg))
+
+	return "", nil
+}
+
+func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (response string, err error) {
+	apiURL := self.URL
+	apiURL.Path = path.Join(apiURL.Path, "/api/"+self.Project+"/store/")
+	apiURL.User = nil
+	location := apiURL.String()
+
+	// for loop to follow redirects
+	for {
+		buf := bytes.NewBuffer(packet)
+		req, err := http.NewRequest("POST", location, buf)
+		if err != nil {
+			return "", err
+		}
+
+		authHeader := auth_header(timestamp, self.PublicKey)
+		req.Header.Add("X-Sentry-Auth", authHeader)
+		req.Header.Add("Content-Type", "application/octet-stream")
+		req.Header.Add("Connection", "close")
+		req.Header.Add("Accept-Encoding", "identity")
+
+		resp, err := self.Client.Do(req)
+		if err != nil {
+			return "", err
+		}
+
+		if resp.StatusCode == 301 {
+			// set the location to the new one to retry on the next iteration
+			location = resp.Header["Location"][0]
+		} else {
+
+			// We want to return an error for anything that's not a
+			// straight HTTP 200
+			if resp.StatusCode != 200 {
+				body, _ := ioutil.ReadAll(resp.Body)
+				return string(body), errors.New(resp.Status)
+			}
+			body, _ := ioutil.ReadAll(resp.Body)
+			return string(body), nil
+		}
+	}
+	// should never get here
+	panic("send broke out of loop")
+}
+
 type Client struct {
-	URL        *url.URL
-	PublicKey  string
-	SecretKey  string
-	Project    string
-	httpClient *http.Client
+	URL       *url.URL
+	PublicKey string
+	SecretKey string
+	Project   string
+
+	sentryTransport SentryTransport
 }
 
 type sentryRequest struct {
@@ -68,6 +150,8 @@ const iso8601 = "2006-01-02T15:04:05"
 // eg:
 //	http://abcd:efgh@sentry.example.com/sentry/project1
 func NewClient(dsn string) (self *Client, err error) {
+	var sentryTransport SentryTransport
+
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, err
@@ -84,8 +168,22 @@ func NewClient(dsn string) (self *Client, err error) {
 		return nil
 	}
 
-	httpClient := &http.Client{nil, check, nil}
-	return &Client{URL: u, PublicKey: publicKey, SecretKey: secretKey, httpClient: httpClient, Project: project}, nil
+	switch {
+	case u.Scheme == "udp":
+		udpClient, _ := net.Dial("udp", u.Host)
+		sentryTransport = &UdpSentryTransport{URL: u,
+			Client:    udpClient,
+			PublicKey: publicKey}
+	case u.Scheme == "http":
+		httpClient := &http.Client{nil, check, nil}
+		sentryTransport = &HttpSentryTransport{URL: u,
+			Client:    httpClient,
+			Project:   project,
+			PublicKey: publicKey}
+	}
+
+	return &Client{URL: u, PublicKey: publicKey, SecretKey: secretKey,
+		sentryTransport: sentryTransport, Project: project}, nil
 }
 
 // CaptureMessage sends a message to the Sentry server. The resulting string is an event identifier.
@@ -125,7 +223,7 @@ func (self *Client) CaptureMessage(message ...string) (result string, err error)
 		return "", err
 	}
 
-	result, ok := self.Send(buf.Bytes(), timestamp)
+	result, ok := self.sentryTransport.Send(buf.Bytes(), timestamp)
 	if ok != nil {
 		return "", err
 	}
@@ -138,90 +236,10 @@ func (self *Client) CaptureMessagef(format string, a ...interface{}) (result str
 	return self.CaptureMessage(fmt.Sprintf(format, a))
 }
 
-/*
-Sends data using HTTP or UDP.
-
-Response may or may not be populated, but the error code will always
-be populated if one is detected.
-*/
-func (self *Client) Send(packet []byte, timestamp time.Time) (result string, err error) {
-	if self.URL.Scheme == "udp" {
-		return self.SendUdp(packet, timestamp)
-	} else if self.URL.Scheme == "http" {
-		return self.SendHttp(packet, timestamp)
-	}
-	panic("invalid url scheme!")
-}
-
-// send a packet to the sentry server using UDP
-func (self *Client) SendUdp(packet []byte, timestamp time.Time) (response string, err error) {
-	host := self.URL.Host
-
-	conn, err := net.Dial("udp", host)
-	defer func() {
-		conn.Close()
-	}()
-
-	if err != nil {
-		log.Println("Error opening the UDP socket: [%s]", host)
-		return err.Error(), err
-	}
-
-	authHeader := self.auth_header(timestamp)
-	udp_msg := fmt.Sprintf("%s\n\n%s", authHeader, string(packet))
-	conn.Write([]byte(udp_msg))
-
-	return "", nil
-}
-
 /* Compute the Sentry authentication header */
-func (self *Client) auth_header(timestamp time.Time) string {
-	return fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(), self.PublicKey)
-}
-
-// sends a packet to the sentry server with a given timestamp
-func (self *Client) SendHttp(packet []byte, timestamp time.Time) (response string, err error) {
-	apiURL := self.URL
-	apiURL.Path = path.Join(apiURL.Path, "/api/"+self.Project+"/store/")
-	apiURL.User = nil
-	location := apiURL.String()
-
-	// for loop to follow redirects
-	for {
-		buf := bytes.NewBuffer(packet)
-		req, err := http.NewRequest("POST", location, buf)
-		if err != nil {
-			return "", err
-		}
-
-		authHeader := self.auth_header(timestamp)
-		req.Header.Add("X-Sentry-Auth", authHeader)
-		req.Header.Add("Content-Type", "application/octet-stream")
-		req.Header.Add("Connection", "close")
-		req.Header.Add("Accept-Encoding", "identity")
-
-		resp, err := self.httpClient.Do(req)
-		if err != nil {
-			return "", err
-		}
-
-		if resp.StatusCode == 301 {
-			// set the location to the new one to retry on the next iteration
-			location = resp.Header["Location"][0]
-		} else {
-
-			// We want to return an error for anything that's not a
-			// straight HTTP 200
-			if resp.StatusCode != 200 {
-				body, _ := ioutil.ReadAll(resp.Body)
-				return string(body), errors.New(resp.Status)
-			}
-			body, _ := ioutil.ReadAll(resp.Body)
-			return string(body), nil
-		}
-	}
-	// should never get here
-	panic("send broke out of loop")
+func auth_header(timestamp time.Time, publicKey string) string {
+	return fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(),
+		publicKey)
 }
 
 func uuid4() string {
