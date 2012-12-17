@@ -35,6 +35,10 @@ import (
 	"time"
 )
 
+const (
+	UDP_TEMPLATE = "%s\n\n%s"
+)
+
 type SentryTransport interface {
 	Send(packet []byte, timestamp time.Time) (response string, err error)
 }
@@ -65,8 +69,8 @@ func (self *UdpSentryTransport) Send(packet []byte, timestamp time.Time) (respon
 		return err.Error(), err
 	}
 
-	authHeader := auth_header(timestamp, self.PublicKey)
-	udp_msg := fmt.Sprintf("%s\n\n%s", authHeader, string(packet))
+	authHeader := AuthHeader(timestamp, self.PublicKey)
+	udp_msg := fmt.Sprintf(UDP_TEMPLATE, authHeader, string(packet))
 	self.Client.Write([]byte(udp_msg))
 
 	return "", nil
@@ -86,7 +90,7 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 			return "", err
 		}
 
-		authHeader := auth_header(timestamp, self.PublicKey)
+		authHeader := AuthHeader(timestamp, self.PublicKey)
 		req.Header.Add("X-Sentry-Auth", authHeader)
 		req.Header.Add("Content-Type", "application/octet-stream")
 		req.Header.Add("Connection", "close")
@@ -237,7 +241,7 @@ func (self *Client) CaptureMessagef(format string, a ...interface{}) (result str
 }
 
 /* Compute the Sentry authentication header */
-func auth_header(timestamp time.Time, publicKey string) string {
+func AuthHeader(timestamp time.Time, publicKey string) string {
 	return fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(),
 		publicKey)
 }

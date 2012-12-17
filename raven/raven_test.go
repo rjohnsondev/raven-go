@@ -14,17 +14,44 @@
 package raven
 
 import (
+	"code.google.com/p/gomock/gomock"
+	"fmt"
 	gs "github.com/rafrombrc/gospec/src/gospec"
+	ts "heka/testsupport"
+	"time"
 )
 
 func RavenSpec(c gs.Context) {
+
+	t := new(ts.SimpleT)
+	ctrl := gomock.NewController(t)
+
 	c.Specify("sending udp", func() {
-		dsn := "udp://59a868d4c312450ba46074dc48ae4bc5:aed77a1e07514208b90d43451083b9d4@localhost:9001/2"
+		dsn := "udp://someuser:somepass@localhost:801/2"
 		client, _ := NewClient(dsn)
 
-		client.CaptureMessage("blah blah blah", "some other text",
-			"how do exceptions actually work in this thing?")
-		// uh.. i need to inject a mock
+		udp_transport := client.sentryTransport.(*UdpSentryTransport)
+
+		origClient := udp_transport.Client
+
+		// Clobber the client with a mock network connection
+		mock_conn := ts.NewMockConn(ctrl)
+		udp_transport.Client = mock_conn
+		defer func() {
+			udp_transport := client.sentryTransport.(*UdpSentryTransport)
+			udp_transport.Client = origClient
+		}()
+
+		timestamp := time.Now().UTC()
+
+		str_packet := "some-data-string"
+		expected_msg := []byte(fmt.Sprintf(UDP_TEMPLATE,
+			AuthHeader(timestamp, udp_transport.PublicKey),
+			str_packet))
+
+		mock_conn.EXPECT().Write(expected_msg)
+		mock_conn.EXPECT().Close()
+		client.sentryTransport.Send([]byte(str_packet), timestamp)
 
 	})
 }
