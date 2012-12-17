@@ -21,10 +21,12 @@ import (
 	"compress/zlib"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -176,15 +178,13 @@ func (client Client) Send(packet []byte, timestamp time.Time) (response *http.Re
 	panic("send broke out of loop")
 }
 
-func uuid4() (string, error) {
-	//TODO: Verify this algorithm or use an external library
-	uuid := make([]byte, 16)
-	n, err := rand.Read(uuid)
-	if n != len(uuid) || err != nil {
-		return "", err
+func uuid4() string {
+	b := make([]byte, 16)
+	_, err := io.ReadFull(rand.Reader, b)
+	if err != nil {
+		log.Fatal(err)
 	}
-	uuid[8] = 0x80
-	uuid[4] = 0x40
-
-	return hex.EncodeToString(uuid), nil
+	b[6] = (b[6] & 0x0F) | 0x40
+	b[8] = (b[8] &^ 0x40) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
