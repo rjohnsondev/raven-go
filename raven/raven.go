@@ -43,11 +43,15 @@ type SentryTransport interface {
 	Send(packet []byte, timestamp time.Time) (response string, err error)
 }
 
+type HttpClient interface {
+	Do(req *http.Request) (resp *http.Response, err error)
+}
+
 type HttpSentryTransport struct {
 	PublicKey string
 	URL       *url.URL
 	Project   string
-	Client    *http.Client
+	Client    HttpClient
 }
 
 type UdpSentryTransport struct {

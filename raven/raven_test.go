@@ -54,4 +54,32 @@ func RavenSpec(c gs.Context) {
 		client.sentryTransport.Send([]byte(str_packet), timestamp)
 
 	})
+
+	c.Specify("http transport works on simple POST, no redirects", func() {
+		dsn := "http://someuser:somepass@localhost:801/2"
+		client, _ := NewClient(dsn)
+
+		http_transport := client.sentryTransport.(*HttpSentryTransport)
+
+		origClient := http_transport.Client
+
+		// Clobber the client with a mock network connection
+		mock := NewMockHttpClient(ctrl)
+		http_transport.Client = mock
+		defer func() {
+			http_transport := client.sentryTransport.(*HttpSentryTransport)
+			http_transport.Client = origClient
+		}()
+
+		timestamp := time.Now().UTC()
+
+		str_packet := "some-data-string"
+
+		// TODO: change the gomock.Any() to an expected request object
+        // Right now this crashes gomock for me
+		mock.EXPECT().Do(gomock.Any())
+
+		client.sentryTransport.Send([]byte(str_packet), timestamp)
+
+	})
 }
