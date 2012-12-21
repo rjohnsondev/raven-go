@@ -74,6 +74,7 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 	apiURL.User = nil
 	location := apiURL.String()
 
+	fmt.Println("Pre forloop")
 	// for loop to follow redirects
 	for {
 		buf := bytes.NewBuffer(packet)
@@ -88,6 +89,7 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 		req.Header.Add("Connection", "close")
 		req.Header.Add("Accept-Encoding", "identity")
 
+	fmt.Println("Calling Client.Do")
 		resp, err := self.Client.Do(req)
 		if err != nil {
 			return "", err
