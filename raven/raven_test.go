@@ -50,7 +50,7 @@ func RavenSpec(c gs.Context) {
 
 	c.Specify("udp transport writes to a network connection", func() {
 		dsn := "udp://someuser:somepass@localhost:801/2"
-		client, _ := NewClient(dsn)
+		client, _ := NewClient(dsn, "logger")
 
 		udp_transport := client.sentryTransport.(*UdpSentryTransport)
 
@@ -78,8 +78,8 @@ func RavenSpec(c gs.Context) {
 	})
 
 	c.Specify("http transport works on simple POST, no redirects", func() {
-        // I"ve skipped this test until I can sort out the gomock
-        // issue with HTTP Client
+		// I"ve skipped this test until I can sort out the gomock
+		// issue with HTTP Client
 		return
 		/*
 			dsn := "http://someuser:somepass@localhost:801/2"

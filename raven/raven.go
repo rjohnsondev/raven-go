@@ -72,9 +72,10 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 	apiURL := self.URL
 	apiURL.Path = path.Join(apiURL.Path, "/api/"+self.Project+"/store/")
 	apiURL.User = nil
-	location := apiURL.String()
 
-	fmt.Println("Pre forloop")
+	// Append slash to prevent 301 redirect
+	location := strings.TrimRight(apiURL.String(), "/") + "/"
+
 	// for loop to follow redirects
 	for {
 		buf := bytes.NewBuffer(packet)
@@ -89,7 +90,6 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 		req.Header.Add("Connection", "close")
 		req.Header.Add("Accept-Encoding", "identity")
 
-	fmt.Println("Calling Client.Do")
 		resp, err := self.Client.Do(req)
 		if err != nil {
 			return "", err
@@ -119,12 +119,12 @@ type Client struct {
 	PublicKey string
 	SecretKey string
 	Project   string
+	Logger    string
 
 	sentryTransport SentryTransport
 }
 
 type sentryRequest struct {
-	EventId   string `json:"event_id"`
 	Project   string `json:"project"`
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
@@ -147,7 +147,7 @@ const iso8601 = "2006-01-02T15:04:05"
 //	{PROTOCOL}://{PUBLIC_KEY}:{SECRET_KEY}@{HOST}/{PATH}{PROJECT_ID}
 // eg:
 //	http://abcd:efgh@sentry.example.com/sentry/project1
-func NewClient(dsn string) (self *Client, err error) {
+func NewClient(dsn string, logger string) (self *Client, err error) {
 	var sentryTransport SentryTransport
 
 	u, err := url.Parse(dsn)
@@ -184,25 +184,45 @@ func NewClient(dsn string) (self *Client, err error) {
 	}
 
 	return &Client{URL: u, PublicKey: publicKey, SecretKey: secretKey,
-		sentryTransport: sentryTransport, Project: project}, nil
+		sentryTransport: sentryTransport, Project: project, Logger: logger}, nil
 }
 
-// CaptureMessage sends a message to the Sentry server. The resulting string is an event identifier.
-func (self *Client) CaptureMessage(message ...string) (result string, err error) {
-	eventId := uuid4()
-	if err != nil {
-		return "", err
-	}
+// Sends a message to the sentry server with level "debug"
+func (self *Client) Debug(message ...string) (err error) {
+	return self.captureMessage("debug", message)
+}
+
+// Sends a message to the sentry server with level "info"
+func (self *Client) Info(message ...string) (err error) {
+	return self.captureMessage("info", message)
+}
+
+// Sends a message to the sentry server with level "warning"
+func (self *Client) Warning(message ...string) (err error) {
+	return self.captureMessage("warning", message)
+}
+
+// Sends a message to the sentry server with level "error"
+func (self *Client) Error(message ...string) (err error) {
+	return self.captureMessage("error", message)
+}
+
+// Sends a message to the sentry server with level "fatal"
+func (self *Client) Fatal(message ...string) (err error) {
+	return self.captureMessage("fatal", message)
+}
+
+// CaptureMessage sends a message to the Sentry server.
+func (self *Client) captureMessage(level string, message []string) (err error) {
 	timestamp := time.Now().UTC()
 	timestampStr := timestamp.Format(iso8601)
 
 	packet := sentryRequest{
-		EventId:   eventId,
 		Project:   self.Project,
 		Message:   strings.Join(message, " "),
 		Timestamp: timestampStr,
-		Level:     "error",
-		Logger:    "root",
+		Level:     level,
+		Logger:    self.Logger,
 	}
 
 	buf := new(bytes.Buffer)
@@ -211,45 +231,29 @@ func (self *Client) CaptureMessage(message ...string) (result string, err error)
 	jsonEncoder := json.NewEncoder(writer)
 
 	if err := jsonEncoder.Encode(packet); err != nil {
-		return "", err
+		return err
 	}
 
 	err = writer.Close()
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	err = b64Encoder.Close()
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	result, ok := self.sentryTransport.Send(buf.Bytes(), timestamp)
+	_, ok := self.sentryTransport.Send(buf.Bytes(), timestamp)
 	if ok != nil {
-		return "", err
+		return err
 	}
-	return eventId, nil
-}
 
-// CaptureMessagef is similar to CaptureMessage except it is using Printf like parameters for
-// formating the message
-func (self *Client) CaptureMessagef(format string, a ...interface{}) (result string, err error) {
-	return self.CaptureMessage(fmt.Sprintf(format, a))
+	return nil
 }
 
 /* Compute the Sentry authentication header */
 func AuthHeader(timestamp time.Time, publicKey string) string {
 	return fmt.Sprintf(xSentryAuthTemplate, timestamp.Unix(),
 		publicKey)
-}
-
-func uuid4() string {
-	b := make([]byte, 16)
-	_, err := io.ReadFull(rand.Reader, b)
-	if err != nil {
-		log.Fatal(err)
-	}
-	b[6] = (b[6] & 0x0F) | 0x40
-	b[8] = (b[8] &^ 0x40) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/kisielk/raven-go/raven"
+	"github.com/endeveit/raven-go/raven"
 	"os"
 	"strings"
 )
@@ -23,14 +23,14 @@ func main() {
 	}
 
 	fmt.Printf("Using DSN configuration:\n %v\n", dsn)
-	client, err := raven.NewClient(dsn)
+	client, err := raven.NewClient(dsn, "logger")
 
 	if err != nil {
 		fmt.Printf("could not connect: %v", dsn)
 	}
 
 	fmt.Printf("Sending a test message...\n")
-	id, err := client.CaptureMessage("This is a test message generated using ``goraven test``")
+	id, err := client.Info("This is a test message generated using ``goraven test``")
 
 	if err != nil {
 		fmt.Printf("failed: %v\n", err)
