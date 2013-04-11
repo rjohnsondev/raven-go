@@ -67,7 +67,6 @@ func (self *UdpSentryTransport) Send(packet []byte, timestamp time.Time) (respon
 
 func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (response string, err error) {
 	apiURL := self.URL
-	apiURL.Path = path.Join(apiURL.Path, "/api/"+self.Project+"/store/")
 	apiURL.User = nil
 
 	// Append slash to prevent 301 redirect
@@ -96,7 +95,6 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 			// set the location to the new one to retry on the next iteration
 			location = resp.Header["Location"][0]
 		} else {
-
 			// We want to return an error for anything that's not a
 			// straight HTTP 200
 			if resp.StatusCode != 200 {
@@ -127,6 +125,7 @@ type sentryRequest struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"`
 	Logger    string `json:"logger"`
+    Extra     map[string]interface{} `json:"extra"`
 }
 
 type sentryResponse struct {
@@ -172,12 +171,24 @@ func NewClient(dsn string, logger string) (self *Client, err error) {
 		sentryTransport = &UdpSentryTransport{URL: u,
 			Client:    udp_conn,
 			PublicKey: publicKey}
-	case u.Scheme == "http":
+	case u.Scheme == "https":
 		httpClient := &http.Client{nil, check, nil}
-		sentryTransport = &HttpSentryTransport{URL: u,
+        u.Path = path.Join(u.Path, "/api/"+project+"/store/")
+		sentryTransport = &HttpSentryTransport{
+            URL: u,
 			Client:    httpClient,
 			Project:   project,
 			PublicKey: publicKey}
+	case u.Scheme == "http":
+		httpClient := &http.Client{nil, check, nil}
+        u.Path = path.Join(u.Path, "/api/"+project+"/store/")
+		sentryTransport = &HttpSentryTransport{
+            URL: u,
+			Client:    httpClient,
+			Project:   project,
+			PublicKey: publicKey}
+    default:
+        return nil, fmt.Errorf("Invalid protocol specified: %s", u.Scheme)
 	}
 
 	return &Client{URL: u, PublicKey: publicKey, SecretKey: secretKey,
@@ -185,41 +196,42 @@ func NewClient(dsn string, logger string) (self *Client, err error) {
 }
 
 // Sends a message to the sentry server with level "debug"
-func (self *Client) Debug(message ...string) (err error) {
-	return self.captureMessage("debug", message)
+func (self *Client) Debug(message string, extra map[string]interface{}) (err error) {
+	return self.captureMessage("debug", message, extra)
 }
 
 // Sends a message to the sentry server with level "info"
-func (self *Client) Info(message ...string) (err error) {
-	return self.captureMessage("info", message)
+func (self *Client) Info(message string, extra map[string]interface{}) (err error) {
+	return self.captureMessage("info", message, extra)
 }
 
 // Sends a message to the sentry server with level "warning"
-func (self *Client) Warning(message ...string) (err error) {
-	return self.captureMessage("warning", message)
+func (self *Client) Warning(message string, extra map[string]interface{}) (err error) {
+	return self.captureMessage("warning", message, extra)
 }
 
 // Sends a message to the sentry server with level "error"
-func (self *Client) Error(message ...string) (err error) {
-	return self.captureMessage("error", message)
+func (self *Client) Error(message string, extra map[string]interface{}) (err error) {
+	return self.captureMessage("error", message, extra)
 }
 
 // Sends a message to the sentry server with level "fatal"
-func (self *Client) Fatal(message ...string) (err error) {
-	return self.captureMessage("fatal", message)
+func (self *Client) Fatal(message string, extra map[string]interface{}) (err error) {
+	return self.captureMessage("fatal", message, extra)
 }
 
 // CaptureMessage sends a message to the Sentry server.
-func (self *Client) captureMessage(level string, message []string) (err error) {
+func (self *Client) captureMessage(level string, message string, extra map[string]interface{}) (err error) {
 	timestamp := time.Now().UTC()
 	timestampStr := timestamp.Format(iso8601)
 
 	packet := sentryRequest{
 		Project:   self.Project,
-		Message:   strings.Join(message, " "),
+		Message:   message,
 		Timestamp: timestampStr,
 		Level:     level,
 		Logger:    self.Logger,
+        Extra:     extra,
 	}
 
 	buf := new(bytes.Buffer)
@@ -241,8 +253,8 @@ func (self *Client) captureMessage(level string, message []string) (err error) {
 		return err
 	}
 
-	_, ok := self.sentryTransport.Send(buf.Bytes(), timestamp)
-	if ok != nil {
+	_, err = self.sentryTransport.Send(buf.Bytes(), timestamp)
+	if err != nil {
 		return err
 	}
 
