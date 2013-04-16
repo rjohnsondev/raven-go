@@ -36,6 +36,10 @@ const (
 	UDP_TEMPLATE = "%s\n\n%s"
 )
 
+var (
+	maxFollows int = 10
+)
+
 type SentryTransport interface {
 	Send(packet []byte, timestamp time.Time) (response string, err error)
 }
@@ -73,6 +77,7 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 	location := strings.TrimRight(apiURL.String(), "/") + "/"
 
 	// for loop to follow redirects
+	followCounter := 0
 	for {
 		buf := bytes.NewBuffer(packet)
 		req, err := http.NewRequest("POST", location, buf)
@@ -90,10 +95,15 @@ func (self *HttpSentryTransport) Send(packet []byte, timestamp time.Time) (respo
 		if err != nil {
 			return "", err
 		}
+		defer resp.Body.Close()
 
 		if resp.StatusCode == 301 {
 			// set the location to the new one to retry on the next iteration
 			location = resp.Header["Location"][0]
+			followCounter++
+			if followCounter >= maxFollows {
+				return "", fmt.Errorf("Was redirected more than %d times, giving up", maxFollows)
+			}
 		} else {
 			// We want to return an error for anything that's not a
 			// straight HTTP 200
@@ -120,12 +130,12 @@ type Client struct {
 }
 
 type sentryRequest struct {
-	Project   string `json:"project"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
-	Level     string `json:"level"`
-	Logger    string `json:"logger"`
-    Extra     map[string]interface{} `json:"extra"`
+	Project   string                 `json:"project"`
+	Message   string                 `json:"message"`
+	Timestamp string                 `json:"timestamp"`
+	Level     string                 `json:"level"`
+	Logger    string                 `json:"logger"`
+	Extra     map[string]interface{} `json:"extra"`
 }
 
 type sentryResponse struct {
@@ -173,22 +183,22 @@ func NewClient(dsn string, logger string) (self *Client, err error) {
 			PublicKey: publicKey}
 	case u.Scheme == "https":
 		httpClient := &http.Client{nil, check, nil}
-        u.Path = path.Join(u.Path, "/api/"+project+"/store/")
+		u.Path = path.Join(u.Path, "/api/"+project+"/store/")
 		sentryTransport = &HttpSentryTransport{
-            URL: u,
+			URL:       u,
 			Client:    httpClient,
 			Project:   project,
 			PublicKey: publicKey}
 	case u.Scheme == "http":
 		httpClient := &http.Client{nil, check, nil}
-        u.Path = path.Join(u.Path, "/api/"+project+"/store/")
+		u.Path = path.Join(u.Path, "/api/"+project+"/store/")
 		sentryTransport = &HttpSentryTransport{
-            URL: u,
+			URL:       u,
 			Client:    httpClient,
 			Project:   project,
 			PublicKey: publicKey}
-    default:
-        return nil, fmt.Errorf("Invalid protocol specified: %s", u.Scheme)
+	default:
+		return nil, fmt.Errorf("Invalid protocol specified: %s", u.Scheme)
 	}
 
 	return &Client{URL: u, PublicKey: publicKey, SecretKey: secretKey,
@@ -231,7 +241,7 @@ func (self *Client) captureMessage(level string, message string, extra map[strin
 		Timestamp: timestampStr,
 		Level:     level,
 		Logger:    self.Logger,
-        Extra:     extra,
+		Extra:     extra,
 	}
 
 	buf := new(bytes.Buffer)
